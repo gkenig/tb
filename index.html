@@ -10,94 +10,170 @@
 <title>Tube Board</title>
 <style>
   body { margin: 0; background: #1a1a1a; color: #ddd; font-family: system-ui, sans-serif; }
-  header { display: flex; flex-wrap: wrap; gap: 12px; padding: 16px; background: #000; }
-  select { font-size: 16px; padding: 6px 8px; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 16px; background: #000; }
+  header h1 { flex: 1; margin: 0; font-size: 20px; color: #fff; }
+  select, button { font-size: 16px; padding: 6px 10px; }
   main { max-width: 760px; margin: 0 auto; padding: 16px; }
-  #title { margin: 0 0 16px; padding: 10px 16px; color: #fff; font-size: 22px; border-radius: 4px; }
-  .platform { background: #000; border: 4px solid #333; border-radius: 6px; margin-bottom: 16px; padding: 12px 16px;
+  .journey { margin-bottom: 24px; }
+  .title { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; padding: 10px 16px; color: #fff; font-size: 20px; border-radius: 4px; }
+  .title span { flex: 1; }
+  .platform { background: #000; border: 4px solid #333; border-radius: 6px; margin-bottom: 8px; padding: 12px 16px;
               font-family: "Courier New", monospace; color: #ffb000; }
-  .platform h2 { margin: 0 0 8px; font-size: 14px; color: #888; text-transform: uppercase; }
+  .platform h3 { margin: 0 0 8px; font-size: 14px; color: #888; text-transform: uppercase; }
   .row { display: flex; gap: 12px; font-size: 22px; line-height: 1.6; }
   .dest { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-  #meta { color: #888; font-size: 13px; }
+  .meta { color: #888; font-size: 13px; }
+  .edit-only { display: none; }
+  body.editing .edit-only { display: inline-block; }
+  [hidden] { display: none !important; }
 </style>
 </head>
 <body>
-<header>
-  <select id="line" aria-label="Line"></select>
-  <select id="stop" aria-label="Station"></select>
-</header>
-<main>
-  <h1 id="title"></h1>
-  <div id="board"></div>
-  <p id="meta"></p>
-</main>
+<section id="home">
+  <header>
+    <h1>My journeys</h1>
+    <button id="edit">Edit</button>
+    <button id="add">+ Add</button>
+  </header>
+  <main>
+    <div id="journeys"></div>
+    <p class="meta" id="homeMeta"></p>
+  </main>
+</section>
+<section id="picker" hidden>
+  <header>
+    <button id="back" aria-label="Back to my journeys">←</button>
+    <select id="line" aria-label="Line"></select>
+    <select id="stop" aria-label="Station"></select>
+    <select id="platform" aria-label="Platform"><option value="">All platforms</option></select>
+    <button id="save">Save journey</button>
+  </header>
+  <main>
+    <div id="board"></div>
+    <p class="meta" id="meta"></p>
+  </main>
+</section>
 <script>
 const API = "https://api.tfl.gov.uk";
 const COLOURS = { bakerloo: "#b36305", central: "#e32017", circle: "#ffd300", district: "#00782a",
   "hammersmith-city": "#f3a9bb", jubilee: "#a0a5a9", metropolitan: "#9b0056", northern: "#000",
-  piccadilly: "#003688", victoria: "#0098d4", "waterloo-city": "#95cdba", elizabeth: "#6950a1" };
-const [lineSel, stopSel, title, board, meta] = ["line", "stop", "title", "board", "meta"].map(id => document.getElementById(id));
+  piccadilly: "#003688", victoria: "#0098d4", "waterloo-city": "#95cdba", elizabeth: "#6950a1", dlr: "#00a4a7" };
+const $ = id => document.getElementById(id);
+const [lineSel, stopSel, platformSel] = [$("line"), $("stop"), $("platform")];
 const params = new URLSearchParams(location.search);
-let timer;
+const ALL_PLATFORMS = `<option value="">All platforms</option>`;
+let timer, requestId = 0;
+
+// Journeys live only in this device's browser storage: [{ line, lineName, stop, stopName, platform }]
+function loadJourneys() { try { return JSON.parse(localStorage.getItem("journeys")) || []; } catch { return []; } }
+function saveJourneys() { try { localStorage.setItem("journeys", JSON.stringify(journeys)); } catch {} }
+let journeys = loadJourneys();
 
 async function get(path) {
   const r = await fetch(API + path, { cache: "no-store" }); // TfL sends max-age=30; bypass it to get fresh predictions
   if (!r.ok) throw new Error(`TfL API returned ${r.status}`);
   return r.json();
 }
-const clean = name => name.replace(/ (Underground|Rail) Station$/, "");
+const clean = name => name.replace(/ (Underground|Rail|DLR) Station$/, "");
 const mins = s => s < 60 ? "Due" : `${Math.floor(s / 60)} min`;
 const dest = a => clean(a.destinationName || a.towards || "Check front of train");
 function pick(sel, value) { sel.value = value; if (sel.selectedIndex < 0) sel.selectedIndex = 0; }
+
+const pickerJourney = () => ({
+  line: lineSel.value, lineName: lineSel.selectedOptions[0].text,
+  stop: stopSel.value, stopName: stopSel.selectedOptions[0].text, platform: platformSel.value });
+
+function boardHtml(j, arrivals, index) {
+  const byPlatform = {};
+  arrivals.filter(a => !j.platform || a.platformName === j.platform)
+          .sort((a, b) => a.timeToStation - b.timeToStation)
+          .forEach(a => (byPlatform[a.platformName] ??= []).push(a));
+  const platforms = Object.keys(byPlatform).sort();
+  const controls = index === undefined ? "" :
+    `<button class="edit-only" data-up="${index}" aria-label="Move up">↑</button>` +
+    `<button class="edit-only" data-del="${index}" aria-label="Remove">✕</button>`;
+  return `<div class="journey">
+    <h2 class="title" style="background:${COLOURS[j.line] || "#444"}"><span>${j.stopName} · ${j.lineName}</span>${controls}</h2>
+    ${platforms.length ? platforms.map(p => `
+      <section class="platform"><h3>${p}</h3>
+        ${byPlatform[p].slice(0, 3).map((a, i) =>
+          `<div class="row"><span>${i + 1}</span><span class="dest">${dest(a)}</span><span>${mins(a.timeToStation)}</span></div>`).join("")}
+      </section>`).join("")
+    : `<section class="platform">${j.platform ? `${j.platform}: no` : "No"} trains currently expected</section>`}
+  </div>`;
+}
+
+function fillPlatforms(arrivals) {
+  const current = platformSel.value;
+  const names = [...new Set(arrivals.map(a => a.platformName))].sort();
+  if (current && !names.includes(current)) names.push(current);
+  platformSel.innerHTML = ALL_PLATFORMS + names.map(p => `<option>${p}</option>`).join("");
+  platformSel.value = current;
+}
+
+async function refresh() {
+  clearTimeout(timer);
+  const onHome = !$("home").hidden;
+  if (!onHome && !stopSel.value) return; // stations still loading; loadStops() will call refresh
+  const id = ++requestId;
+  const list = onHome ? journeys : [pickerJourney()];
+  const [target, meta] = onHome ? [$("journeys"), $("homeMeta")] : [$("board"), $("meta")];
+  history.replaceState(null, "", onHome ? location.pathname : `?line=${lineSel.value}&stop=${stopSel.value}`);
+  if (!list.length) {
+    target.innerHTML = `<p>No journeys yet. Tap “+ Add” to pick a line and station, then “Save journey”.</p>`;
+    meta.textContent = "";
+    return;
+  }
+  try {
+    const results = await Promise.all(list.map(j => get(`/Line/${j.line}/Arrivals/${j.stop}`)));
+    if (id !== requestId) return; // view or selection changed while loading
+    if (!onHome) fillPlatforms(results[0]);
+    target.innerHTML = list.map((j, i) => boardHtml(j, results[i], onHome ? i : undefined)).join("");
+    meta.textContent = `Updated ${new Date().toLocaleTimeString()} · refreshes every 10s`;
+  } catch (e) {
+    meta.textContent = `${e.message} · retrying in 10s`;
+  }
+  timer = setTimeout(refresh, 10000);
+}
+
+function showHome(home) {
+  $("home").hidden = !home;
+  $("picker").hidden = home;
+  refresh();
+}
 
 async function loadStops(stop) {
   const stops = await get(`/Line/${lineSel.value}/StopPoints`);
   stops.sort((a, b) => a.commonName.localeCompare(b.commonName));
   stopSel.innerHTML = stops.map(s => `<option value="${s.naptanId}">${clean(s.commonName)}</option>`).join("");
   pick(stopSel, stop);
-  show();
-}
-
-async function show() {
-  clearTimeout(timer);
-  const line = lineSel.value, stop = stopSel.value;
-  history.replaceState(null, "", `?line=${line}&stop=${stop}`);
-  title.textContent = `${stopSel.selectedOptions[0].text} · ${lineSel.selectedOptions[0].text}`;
-  title.style.background = COLOURS[line] || "#444";
-  try {
-    const arrivals = await get(`/Line/${line}/Arrivals/${stop}`);
-    if (line !== lineSel.value || stop !== stopSel.value) return; // selection changed while loading
-    render(arrivals);
-    meta.textContent = `Updated ${new Date().toLocaleTimeString()} · refreshes every 10s`;
-  } catch (e) {
-    meta.textContent = `${e.message} · retrying in 10s`;
-  }
-  timer = setTimeout(show, 10000);
-}
-
-function render(arrivals) {
-  const byPlatform = {};
-  arrivals.sort((a, b) => a.timeToStation - b.timeToStation)
-          .forEach(a => (byPlatform[a.platformName] ??= []).push(a));
-  const platforms = Object.keys(byPlatform).sort();
-  board.innerHTML = platforms.length ? platforms.map(p => `
-    <section class="platform"><h2>${p}</h2>
-      ${byPlatform[p].slice(0, 3).map((a, i) =>
-        `<div class="row"><span>${i + 1}</span><span class="dest">${dest(a)}</span><span>${mins(a.timeToStation)}</span></div>`).join("")}
-    </section>`).join("")
-    : `<section class="platform">No trains currently expected</section>`;
+  platformSel.innerHTML = ALL_PLATFORMS;
+  if (!$("picker").hidden) refresh();
 }
 
 lineSel.onchange = () => loadStops(null);
-stopSel.onchange = show;
-document.onvisibilitychange = () => { if (!document.hidden && stopSel.value) show(); };
+stopSel.onchange = () => { platformSel.innerHTML = ALL_PLATFORMS; refresh(); };
+platformSel.onchange = refresh;
+$("add").onclick = () => showHome(false);
+$("back").onclick = () => showHome(true);
+$("save").onclick = () => { journeys.push(pickerJourney()); saveJourneys(); showHome(true); };
+$("edit").onclick = () => { $("edit").textContent = document.body.classList.toggle("editing") ? "Done" : "Edit"; };
+$("journeys").onclick = e => {
+  const { up, del } = e.target.dataset;
+  if (del !== undefined) journeys.splice(del, 1);
+  else if (up > 0) journeys.splice(up - 1, 0, journeys.splice(up, 1)[0]);
+  else return;
+  saveJourneys();
+  refresh();
+};
+document.onvisibilitychange = () => { if (!document.hidden) refresh(); };
 
-get("/Line/Mode/tube,elizabeth-line").then(lines => {
+showHome(!params.has("line"));
+get("/Line/Mode/tube,elizabeth-line,dlr").then(lines => {
   lineSel.innerHTML = lines.map(l => `<option value="${l.id}">${l.name}</option>`).join("");
   pick(lineSel, params.get("line"));
   return loadStops(params.get("stop"));
-}).catch(e => meta.textContent = e.message);
+}).catch(e => $("meta").textContent = e.message);
 </script>
 </body>
 </html>
