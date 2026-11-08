@@ -92,7 +92,7 @@ const pickerJourney = () => ({
 
 function boardHtml(j, arrivals, index, statusMessages = []) {
   const byPlatform = {};
-  arrivals.filter(a => !j.platform || a.platformName === j.platform)
+  arrivals.filter(a => (!j.platform || a.platformName === j.platform) && a.timeToStation <= 30 * 60)
           .sort((a, b) => a.timeToStation - b.timeToStation)
           .forEach(a => (byPlatform[a.platformName] ??= []).push(a));
   const platforms = Object.keys(byPlatform).sort();
