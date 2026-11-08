@@ -70,6 +70,7 @@ const COLOURS = { bakerloo: "#b36305", central: "#e32017", circle: "#ffd300", di
   "hammersmith-city": "#f3a9bb", jubilee: "#a0a5a9", metropolitan: "#9b0056", northern: "#000",
   piccadilly: "#003688", victoria: "#0098d4", "waterloo-city": "#95cdba", elizabeth: "#6950a1", dlr: "#00a4a7",
   liberty: "#61686b", lioness: "#f1b41c", mildmay: "#437ec1", suffragette: "#39b97a", weaver: "#972861", windrush: "#ef4d5e" };
+const VERSION = "2026-11-08 19:22"; // date/time of the commit; update with every commit
 const $ = id => document.getElementById(id);
 const [lineSel, stopSel, platformSel] = [$("line"), $("stop"), $("platform")];
 const params = new URLSearchParams(location.search);
@@ -150,7 +151,7 @@ async function refresh() {
                                                  .map(s => s.reason || s.statusSeverityDescription))];
     if (!onHome) fillPlatforms(results[0]);
     target.innerHTML = list.map((j, i) => boardHtml(j, results[i], onHome ? i : undefined, messages[j.line])).join("");
-    meta.textContent = `Updated ${new Date().toLocaleTimeString()} · refreshes every 10s`;
+    meta.textContent = `Updated ${new Date().toLocaleTimeString()} · refreshes every 10s · version ${VERSION}`;
   } catch (e) {
     meta.textContent = `${e.message} · retrying in 10s`;
   }
