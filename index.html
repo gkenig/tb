@@ -35,6 +35,8 @@
 <section id="home">
   <header>
     <h1>My journeys</h1>
+    <button id="share" class="edit-only">Share list</button>
+    <button id="import" class="edit-only">Import</button>
     <button id="edit">Edit</button>
     <button id="add">+ Add</button>
   </header>
@@ -60,7 +62,8 @@
 const API = "https://api.tfl.gov.uk";
 const COLOURS = { bakerloo: "#b36305", central: "#e32017", circle: "#ffd300", district: "#00782a",
   "hammersmith-city": "#f3a9bb", jubilee: "#a0a5a9", metropolitan: "#9b0056", northern: "#000",
-  piccadilly: "#003688", victoria: "#0098d4", "waterloo-city": "#95cdba", elizabeth: "#6950a1", dlr: "#00a4a7" };
+  piccadilly: "#003688", victoria: "#0098d4", "waterloo-city": "#95cdba", elizabeth: "#6950a1", dlr: "#00a4a7",
+  liberty: "#61686b", lioness: "#f1b41c", mildmay: "#437ec1", suffragette: "#39b97a", weaver: "#972861", windrush: "#ef4d5e" };
 const $ = id => document.getElementById(id);
 const [lineSel, stopSel, platformSel] = [$("line"), $("stop"), $("platform")];
 const params = new URLSearchParams(location.search);
@@ -77,6 +80,7 @@ async function get(path) {
   if (!r.ok) throw new Error(`TfL API returned ${r.status}`);
   return r.json();
 }
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 const clean = name => name.replace(/ (Underground|Rail|DLR) Station$/, "");
 const mins = s => s < 60 ? "Due" : `${Math.floor(s / 60)} min`;
 const dest = a => clean(a.destinationName || a.towards || "Check front of train");
@@ -96,14 +100,14 @@ function boardHtml(j, arrivals, index, statusMessages = []) {
     `<button class="edit-only" data-up="${index}" aria-label="Move up">↑</button>` +
     `<button class="edit-only" data-del="${index}" aria-label="Remove">✕</button>`;
   return `<div class="journey">
-    <h2 class="title" style="background:${COLOURS[j.line] || "#444"}"><span>${j.stopName} · ${j.lineName}</span>${controls}</h2>
+    <h2 class="title" style="background:${COLOURS[j.line] || "#444"}"><span>${esc(j.stopName)} · ${esc(j.lineName)}</span>${controls}</h2>
     ${statusMessages.map(m => `<p class="status">${m}</p>`).join("")}
     ${platforms.length ? platforms.map(p => `
       <section class="platform"><h3>${p}</h3>
         ${byPlatform[p].slice(0, 3).map((a, i) =>
           `<div class="row"><span>${i + 1}</span><span class="dest">${dest(a)}</span><span>${mins(a.timeToStation)}</span></div>`).join("")}
       </section>`).join("")
-    : `<section class="platform">${j.platform ? `${j.platform}: no` : "No"} trains currently expected</section>`}
+    : `<section class="platform">${j.platform ? `${esc(j.platform)}: no` : "No"} trains currently expected</section>`}
   </div>`;
 }
 
@@ -162,6 +166,45 @@ async function loadStops(stop) {
   if (!$("picker").hidden) refresh();
 }
 
+// Backup/share: the whole list travels inside a link as ?journeys=<JSON>. Links can come from anyone,
+// so only well-formed journeys are kept and names are escaped when shown (see esc).
+function importJourneys(encoded) {
+  let incoming;
+  try { incoming = JSON.parse(encoded); } catch {}
+  if (!Array.isArray(incoming)) return alert("That link doesn't contain any journeys.");
+  const key = j => `${j.line}|${j.stop}|${j.platform}`;
+  const have = new Set(journeys.map(key));
+  const fresh = incoming
+    .filter(j => j && /^[\w-]+$/.test(j.line) && /^\w+$/.test(j.stop) && typeof j.lineName === "string" && typeof j.stopName === "string")
+    .map(j => ({ line: j.line, lineName: j.lineName, stop: j.stop, stopName: j.stopName, platform: String(j.platform || "") }))
+    .filter(j => !have.has(key(j)));
+  if (!fresh.length) return alert("You already have all the journeys in that link.");
+  if (!confirm(`Add ${fresh.length} journey${fresh.length > 1 ? "s" : ""} to your list?\n\n` +
+               fresh.map(j => `${j.stopName} · ${j.lineName}`).join("\n"))) return;
+  journeys.push(...fresh);
+  saveJourneys();
+}
+
+async function shareJourneys() {
+  if (!journeys.length) return alert("No journeys to share yet.");
+  const url = `${location.origin}${location.pathname}?journeys=${encodeURIComponent(JSON.stringify(journeys))}`;
+  try {
+    if (navigator.share) await navigator.share({ title: "My Tube Board journeys", url });
+    else { await navigator.clipboard.writeText(url); alert("Link copied."); }
+  } catch (e) {
+    if (e.name !== "AbortError") prompt("Copy this link:", url); // AbortError = share sheet dismissed
+  }
+}
+
+$("share").onclick = shareJourneys;
+$("import").onclick = () => {
+  const text = prompt("Paste a Tube Board journeys link:");
+  if (!text) return;
+  let encoded = null;
+  try { encoded = new URL(text.trim()).searchParams.get("journeys"); } catch {}
+  importJourneys(encoded);
+  refresh();
+};
 lineSel.onchange = () => loadStops(null);
 stopSel.onchange = () => { platformSel.innerHTML = ALL_PLATFORMS; refresh(); };
 platformSel.onchange = refresh;
@@ -179,8 +222,9 @@ $("journeys").onclick = e => {
 };
 document.onvisibilitychange = () => { if (!document.hidden) refresh(); };
 
-showHome(!params.has("line"));
-get("/Line/Mode/tube,elizabeth-line,dlr").then(lines => {
+if (params.has("journeys")) importJourneys(params.get("journeys"));
+showHome(!params.has("line")); // on the home screen this also strips ?journeys= from the address
+get("/Line/Mode/tube,elizabeth-line,dlr,overground").then(lines => {
   lineSel.innerHTML = lines.map(l => `<option value="${l.id}">${l.name}</option>`).join("");
   pick(lineSel, params.get("line"));
   return loadStops(params.get("stop"));
